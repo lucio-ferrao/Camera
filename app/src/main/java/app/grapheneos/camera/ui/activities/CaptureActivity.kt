@@ -4,6 +4,7 @@ import android.content.Intent
 import android.graphics.Bitmap
 import android.graphics.Bitmap.CompressFormat
 import android.graphics.BitmapFactory
+import android.graphics.ImageDecoder
 import android.graphics.Matrix
 import android.net.Uri
 import android.os.Bundle
@@ -14,27 +15,37 @@ import android.view.View
 import android.view.ViewGroup.MarginLayoutParams
 import android.widget.ImageButton
 import android.widget.ImageView
+import androidx.camera.core.CameraSelector
 import androidx.camera.core.ImageCapture
 import androidx.camera.core.ImageCaptureException
 import androidx.camera.core.ImageProxy
 import androidx.core.content.ContextCompat
+import app.grapheneos.camera.App
 import app.grapheneos.camera.R
+import app.grapheneos.camera.capturer.captureIntentJpeg
 import app.grapheneos.camera.util.getParcelableExtra
 import app.grapheneos.camera.util.isForeignOutputUriAllowed
 import java.io.ByteArrayOutputStream
 import java.lang.Exception
 import java.nio.ByteBuffer
+import java.util.Date
 import androidx.core.graphics.scale
 
 open class CaptureActivity : MainActivity() {
 
     companion object {
         private const val CAPTURE_BUTTON_APPEARANCE_DELAY = 1000L
+
+        // Fork: the extra of the AOSP camera to return the photo without the screen to confirm it
+        private const val EXTRA_QUICK_CAPTURE = "android.intent.extra.quickCapture"
     }
 
     lateinit var outputUri: Uri
 
     var bitmap: Bitmap? = null
+
+    // Fork: the photo as it is returned, with its EXIF (see captureIntentJpeg)
+    private var jpegBytes: ByteArray? = null
 
     private var isTakingPicture = false
 
@@ -105,6 +116,12 @@ open class CaptureActivity : MainActivity() {
         // Remove the third option/circle from the UI
         thirdOption.visibility = View.INVISIBLE
 
+        // Fork: the button to switch cameras on the right, where the third option was
+        threeButtons.removeView(thirdOption)
+        threeButtons.addView(thirdOption, 0)
+        threeButtons.removeView(flipCameraCircle)
+        threeButtons.addView(flipCameraCircle)
+
         captureButton.setOnClickListener {
             if (timerDuration == 0) {
                 takePicture()
@@ -153,12 +170,29 @@ open class CaptureActivity : MainActivity() {
                 override fun onCaptureSuccess(image: ImageProxy) {
                     super.onCaptureSuccess(image)
                     isTakingPicture = false
-                    bitmap = imageProxyToBitmap(image, image.imageInfo.rotationDegrees.toFloat())
+                    val jpeg = try {
+                        captureIntentJpeg(image, imageCapture.jpegQuality, captureMetadata(), camConfig.removeExifAfterCapture, Date())
+                    } catch (e: Exception) {
+                        e.printStackTrace()
+                        null
+                    }
+                    jpegBytes = jpeg
+                    // The preview shows the photo as it is returned, mirrored by its EXIF orientation
+                    bitmap = if (jpeg != null) {
+                        ImageDecoder.decodeBitmap(ImageDecoder.createSource(ByteBuffer.wrap(jpeg))) { decoder, _, _ ->
+                            decoder.allocator = ImageDecoder.ALLOCATOR_SOFTWARE
+                        }
+                    } else {
+                        imageProxyToBitmap(image, image.imageInfo.rotationDegrees.toFloat())
+                    }
+                    image.close()
+                    if (intent.getBooleanExtra(EXTRA_QUICK_CAPTURE, false)) {
+                        confirmImage()
+                        return
+                    }
                     showPreview()
                     previewLoader.visibility = View.GONE
                     showMessage(getString(R.string.image_captured_successfully))
-
-                    image.close()
                 }
 
                 override fun onError(exception: ImageCaptureException) {
@@ -220,17 +254,13 @@ open class CaptureActivity : MainActivity() {
         }
 
         if (::outputUri.isInitialized) {
-            val bos = ByteArrayOutputStream()
-
-            val cf: CompressFormat =
-                if (outputUri.path?.endsWith(".png") == true) {
-                    CompressFormat.PNG
-                } else {
-                    CompressFormat.JPEG
-                }
-
-            bitmap.compress(cf, 100, bos)
-            val bitmapData: ByteArray = bos.toByteArray()
+            val isPng = outputUri.path?.endsWith(".png") == true
+            // Fork: the camera's JPEG with its EXIF, not the bitmap encoded again
+            val bitmapData: ByteArray = jpegBytes.takeIf { !isPng } ?: run {
+                val bos = ByteArrayOutputStream()
+                bitmap.compress(if (isPng) CompressFormat.PNG else CompressFormat.JPEG, 100, bos)
+                bos.toByteArray()
+            }
 
             var result = RESULT_CANCELED
 
@@ -253,6 +283,17 @@ open class CaptureActivity : MainActivity() {
         }
 
         finish()
+    }
+
+    // Fork: same metadata as ImageCapturer.takePicture()
+    private fun captureMetadata(): ImageCapture.Metadata {
+        val metadata = ImageCapture.Metadata()
+        metadata.isReversedHorizontal = camConfig.lensFacing == CameraSelector.LENS_FACING_FRONT
+                && camConfig.saveImageAsPreviewed
+        if (camConfig.requireLocation) {
+            metadata.location = (applicationContext as App).getLocation()
+        }
+        return metadata
     }
 
     private fun imageProxyToBitmap(image: ImageProxy, rotation: Float): Bitmap {

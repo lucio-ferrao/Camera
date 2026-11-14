@@ -45,7 +45,8 @@ android {
     namespace = "app.grapheneos.camera"
 
     defaultConfig {
-        applicationId = "app.grapheneos.camera"
+        // Fork: its own package, installed next to Secure Camera
+        applicationId = "org.ferrao.camera"
         minSdk = 29
         targetSdk = 37
         versionCode = 94
@@ -61,8 +62,11 @@ android {
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
             if (useKeystoreProperties) {
                 signingConfig = signingConfigs.getByName("release")
+            } else {
+                // Fork: without a keystore, signed with the debug key so it can be installed
+                signingConfig = signingConfigs.getByName("debug")
             }
-            resValue("string", "app_name", "Camera")
+            resValue("string", "app_name", "Câmara")
         }
 
         getByName("debug") {
