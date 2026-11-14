@@ -7,6 +7,7 @@ import android.graphics.BitmapFactory
 import android.graphics.ImageDecoder
 import android.graphics.Matrix
 import android.net.Uri
+import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
@@ -68,6 +69,12 @@ open class CaptureActivity : MainActivity() {
 
         getParcelableExtra<Uri>(intent, MediaStore.EXTRA_OUTPUT)?.let {
             outputUri = it
+        }
+
+        // Fork: without the screen to confirm the photo, the app that asked for it shows it next, so this one closes
+        // without an animation
+        if (isQuickCapture() && Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+            overrideActivityTransition(OVERRIDE_TRANSITION_CLOSE, 0, 0)
         }
 
         // Disable capture button for a while (to avoid picture capture)
@@ -186,7 +193,7 @@ open class CaptureActivity : MainActivity() {
                         imageProxyToBitmap(image, image.imageInfo.rotationDegrees.toFloat())
                     }
                     image.close()
-                    if (intent.getBooleanExtra(EXTRA_QUICK_CAPTURE, false)) {
+                    if (isQuickCapture()) {
                         confirmImage()
                         return
                     }
@@ -283,7 +290,13 @@ open class CaptureActivity : MainActivity() {
         }
 
         finish()
+        if (isQuickCapture() && Build.VERSION.SDK_INT < Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+            @Suppress("DEPRECATION")
+            overridePendingTransition(0, 0)
+        }
     }
+
+    private fun isQuickCapture() = intent.getBooleanExtra(EXTRA_QUICK_CAPTURE, false)
 
     // Fork: same metadata as ImageCapturer.takePicture()
     private fun captureMetadata(): ImageCapture.Metadata {
